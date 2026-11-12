@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>TerminalGroupie</RootNamespace>
+    <AssemblyName>TerminalGroupie</AssemblyName>
+
+    <!-- Disable the automatic **/*.xaml Page glob so we register the window XAML explicitly
+         (this is what fixes the "tag 'Window' does not exist" markup-compiler error).
+         App.xaml still gets auto-registered as the ApplicationDefinition (entry point) because
+         it lives at the project root and EnableDefaultApplicationDefinition is left at its default. -->
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Page Include="src\MainWindow.xaml" />
+    <Page Include="src\TerminalWindow.xaml" />
+  </ItemGroup>
+
+</Project>
