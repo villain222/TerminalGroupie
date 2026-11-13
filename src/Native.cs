@@ -211,6 +211,35 @@ namespace TerminalGroupie
         }
 
         /// <summary>
+        /// Opens a handle to the given process. Returns IntPtr.Zero on failure
+        /// (use <see cref="Marshal.GetLastWin32Error"/> to tell ACCESS_DENIED apart
+        /// from "not found"). Used by the elevation probe: a medium-integrity
+        /// process is DENIED a handle to an elevated one.
+        /// </summary>
+        public static IntPtr OpenProcess(uint access, int pid)
+        {
+            IntPtr h = OpenProcessNative(access, true, pid);
+            if (h == IntPtr.Zero)
+            {
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            }
+            return h;
+        }
+
+        /// <summary>Closes a kernel object handle (e.g. one from <see cref="OpenProcess"/>).</summary>
+        public static bool CloseHandle(IntPtr handle)
+        {
+            return CloseHandleNative(handle);
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "OpenProcess")]
+        private static extern IntPtr OpenProcessNative(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "CloseHandle")]
+        [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static extern bool CloseHandleNative(IntPtr hObject);
+
+        /// <summary>
         /// Read-only diagnostic: report the current keyboard-ownership state so we can tell
         /// apart "the real code path routed the console to foreground" from "the wrapper
         /// still owns the foreground". Deliberately changes NOTHING (no AttachThreadInput,

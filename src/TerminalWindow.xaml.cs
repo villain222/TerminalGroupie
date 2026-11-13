@@ -49,6 +49,10 @@ namespace TerminalGroupie
             TitleText.Text = session.Title;
             KindText.Text = session.Kind == ShellKind.PowerShell ? "PowerShell" : "cmd";
 
+            // Same green/red instance icon as the tray, so wrapper windows show
+            // which TerminalGroupie instance owns the shell.
+            Icon = TrayIcons.ToImageSource(Elevation.IsElevated);
+
             SourceInitialized += OnSourceInitialized;
             Loaded += (s, e) => RefitConsole();
             SizeChanged += (s, e) => RequestRefit();

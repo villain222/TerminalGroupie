@@ -15,18 +15,21 @@ namespace TerminalGroupie
         private readonly ContextMenuStrip _menu;
         private readonly SessionManager _mgr;
         private readonly Action _showMain;
+        private readonly bool _elevated;
         private bool _disposed;
 
         public TrayIcon(SessionManager mgr, Action showMain)
         {
             _mgr = mgr;
             _showMain = showMain;
+            _elevated = Elevation.IsElevated;
 
             _menu = new ContextMenuStrip();
             _notify = new NotifyIcon
             {
-                Icon = System.Drawing.SystemIcons.Application,
-                Text = "TerminalGroupie",
+                // Green icon = standard instance, red icon = elevated instance.
+                Icon = TrayIcons.For(_elevated),
+                Text = "TerminalGroupie" + Elevation.Suffix,
                 Visible = true,
                 ContextMenuStrip = _menu
             };
@@ -75,7 +78,38 @@ namespace TerminalGroupie
 
             _menu.Items.Add(new ToolStripSeparator());
 
-            var exit = new ToolStripMenuItem("Exit");
+            if (_elevated)
+            {
+                // This instance runs elevated: it is the one that can manage
+                // admin terminals (attach, re-parent, kill) end-to-end.
+                _menu.Items.Add(new ToolStripMenuItem("This is the ELEVATED instance") { Enabled = false });
+            }
+            else
+            {
+                // Standard instance: offer to spawn the elevated sibling. Windows
+                // won't let a medium-integrity process manage elevated terminals,
+                // so the elevated instance is a separate, red-icon process.
+                bool alreadyUp = Elevation.ElevatedInstanceRunning();
+                var elev = new ToolStripMenuItem(alreadyUp
+                    ? "Elevated instance already running"
+                    : "Open elevated instance (UAC)…");
+                elev.Enabled = !alreadyUp;
+                elev.Click += (a, b) =>
+                {
+                    if (!Elevation.OpenElevatedInstance())
+                    {
+                        System.Windows.MessageBox.Show(
+                            "Could not start an elevated instance (UAC declined or launch failed).",
+                            "TerminalGroupie", System.Windows.MessageBoxButton.OK,
+                            System.Windows.MessageBoxImage.Warning);
+                    }
+                };
+                _menu.Items.Add(elev);
+            }
+
+            _menu.Items.Add(new ToolStripSeparator());
+
+            var exit = new ToolStripMenuItem(_elevated ? "Exit elevated instance" : "Exit");
             exit.Click += (a, b) => App.ExitApp();
             _menu.Items.Add(exit);
         }

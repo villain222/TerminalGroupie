@@ -17,6 +17,11 @@ namespace TerminalGroupie
             _mgr = mgr;
             InitializeComponent();
 
+            // Mark the instance kind in the title bar (e.g. "TerminalGroupie (elevated)")
+            // and carry the matching icon: green = standard, red = elevated.
+            Title = "TerminalGroupie" + Elevation.Suffix;
+            Icon = TrayIcons.ToImageSource(Elevation.IsElevated);
+
             _mgr.SessionsChanged += Refresh;
 
             NewCmdBtn.Click += (s, e) => _mgr.NewTerminal(ShellKind.Cmd);

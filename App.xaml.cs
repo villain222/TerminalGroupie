@@ -94,6 +94,35 @@ namespace TerminalGroupie
         {
             base.OnStartup(e);
 
+            // Unattended elevation probe (no UI, no terminals):
+            //   --elevation-check            report this instance's elevation state and exit
+            //   --elevation-check-out <path> where the one-line report is written
+            // Report line: "elevated=<True|False> elevatedSiblingRunning=<True|False> pid=<n>"
+            if (e.Args.Any(a => string.Equals(a, "--elevation-check", StringComparison.OrdinalIgnoreCase)))
+            {
+                string outPath = Path.Combine(Path.GetTempPath(), "TerminalGroupie_elevation.txt");
+                for (int i = 0; i + 1 < e.Args.Length; i++)
+                {
+                    if (string.Equals(e.Args[i], "--elevation-check-out", StringComparison.OrdinalIgnoreCase))
+                    {
+                        outPath = e.Args[i + 1];
+                    }
+                }
+                try
+                {
+                    string line = "elevated=" + Elevation.IsElevated
+                        + " elevatedSiblingRunning=" + Elevation.ElevatedInstanceRunning()
+                        + " pid=" + Environment.ProcessId;
+                    File.WriteAllText(outPath, line + Environment.NewLine);
+                }
+                catch
+                {
+                    // Diagnostics only; still exit deterministically.
+                }
+                ExitNow();
+                return;
+            }
+
             _sessionManager = new SessionManager(Dispatcher);
             _main = new MainWindow(_sessionManager);
             _tray = new TrayIcon(_sessionManager, ShowMainWindow);
@@ -112,6 +141,8 @@ namespace TerminalGroupie
             }
 
             // Test hooks (used by the smoke test; harmless in normal use):
+            //   --elevation-check            report this instance's elevation state to a file, then exit
+            //   --elevation-check-out <path> where the elevation report is written
             //   --selftest               run the full end-to-end self test, write a report, and exit
             //   --selftest-report <path> where the self-test report is written
             //   --selftest-exit          just run the full clean-exit path after a few seconds
