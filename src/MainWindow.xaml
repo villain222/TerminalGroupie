@@ -1,8 +1,8 @@
 <Window x:Class="TerminalGroupie.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="TerminalGroupie" Height="440" Width="600"
-        MinHeight="260" MinWidth="440"
+        Title="TerminalGroupie" Height="440" Width="700"
+        MinHeight="260" MinWidth="540"
         WindowStartupLocation="CenterScreen">
     <DockPanel>
         <ToolBar DockPanel.Dock="Top" ToolBarTray.IsLocked="True">
@@ -11,6 +11,8 @@
             <Separator />
             <Button x:Name="MinimizeTrayBtn" Content="Minimize to Tray" Padding="8,4" Margin="2" />
             <Button x:Name="KillAllBtn" Content="Kill All" Padding="8,4" Margin="2" />
+            <Separator />
+            <Button x:Name="DefaultTerminalBtn" Content="Default Terminal…" Padding="8,4" Margin="2" />
             <Button x:Name="ExitBtn" Content="Exit" Padding="8,4" Margin="2" />
         </ToolBar>
 
@@ -21,12 +23,14 @@
             </Grid.ColumnDefinitions>
 
             <ListView x:Name="TerminalList" Grid.Column="0" Margin="8"
-                      SelectionChanged="TerminalList_SelectionChanged">
+                      SelectionChanged="TerminalList_SelectionChanged"
+                      MouseDoubleClick="OnTerminalListDoubleClicked">
                 <ListView.View>
                     <GridView>
-                        <GridViewColumn Header="Terminal" Width="200" DisplayMemberBinding="{Binding Title}" />
-                        <GridViewColumn Header="Shell" Width="110" DisplayMemberBinding="{Binding Kind}" />
-                        <GridViewColumn Header="State" Width="90" DisplayMemberBinding="{Binding StateText}" />
+                        <GridViewColumn Header="Terminal" Width="130" DisplayMemberBinding="{Binding Title}" />
+                        <GridViewColumn Header="Shell" Width="80" DisplayMemberBinding="{Binding Kind}" />
+                        <GridViewColumn Header="State" Width="65" DisplayMemberBinding="{Binding StateText}" />
+                        <GridViewColumn Header="Status" Width="180" DisplayMemberBinding="{Binding StatusText}" />
                     </GridView>
                 </ListView.View>
             </ListView>

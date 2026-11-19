@@ -16,6 +16,8 @@ namespace TerminalGroupie
         private readonly SessionManager _mgr;
         private readonly Action _showMain;
         private readonly bool _elevated;
+        private readonly bool _canSetDefaultTerminal;
+        private readonly bool _canRestoreOriginal;
         private bool _disposed;
 
         public TrayIcon(SessionManager mgr, Action showMain)
@@ -23,6 +25,12 @@ namespace TerminalGroupie
             _mgr = mgr;
             _showMain = showMain;
             _elevated = Elevation.IsElevated;
+
+            // We can set the default terminal if either: no policy lock exists (HKCU works), or we're elevated.
+            bool policyLocked = DefaultTerminal.DefaultTerminalLockedByPolicy();
+            _canSetDefaultTerminal = !policyLocked || _elevated;
+            var currentPair = DefaultTerminal.GetCurrent();
+            _canRestoreOriginal = currentPair != null && string.IsNullOrEmpty(currentPair.Item1) == false;
 
             _menu = new ContextMenuStrip();
             _notify = new NotifyIcon
@@ -76,7 +84,8 @@ namespace TerminalGroupie
             _menu.Items.Add(newCmd);
             _menu.Items.Add(newPs);
 
-            _menu.Items.Add(new ToolStripSeparator());
+            // Default-terminal delegation menu (visible when there's a saved pair).
+            AddDefaultTerminalItems();
 
             if (_elevated)
             {
@@ -105,6 +114,9 @@ namespace TerminalGroupie
                     }
                 };
                 _menu.Items.Add(elev);
+
+                // Also offer default-terminal controls from the standard tray.
+                AddDefaultTerminalItems();
             }
 
             _menu.Items.Add(new ToolStripSeparator());
@@ -113,6 +125,90 @@ namespace TerminalGroupie
             exit.Click += (a, b) => App.ExitApp();
             _menu.Items.Add(exit);
         }
+
+        /// <summary>Add default-terminal items to the tray menu (caller ensures separator). Visible only when a pair exists.</summary>
+        private void AddDefaultTerminalItems()
+        {
+            var currentPair = DefaultTerminal.GetCurrent();
+            if (currentPair == null) return;
+
+            bool isWCH = DefaultTerminal.IsWindowsConsoleHost();
+
+            // "Change to WCH" — only show when delegate is NOT already WCH and we can write HKCU.
+            if (!isWCH && _canSetDefaultTerminal)
+            {
+                var setWch = new ToolStripMenuItem("Change default terminal to Windows Console Host…");
+                setWch.Click += (a, b) => OnSetDefaultTerminalToWCH();
+                _menu.Items.Add(setWch);
+            }
+
+            // "Restore original" — only when we're currently on WCH and originals were saved.
+            if (_canRestoreOriginal && isWCH)
+            {
+                var restore = new ToolStripMenuItem("Restore previous default terminal");
+                restore.Click += (a, b) => OnRestoreOriginalDefaultTerminal();
+                _menu.Items.Add(restore);
+            }
+
+            // Show current state.
+            string currentState;
+            if (isWCH) currentState = "Windows Console Host";
+            else currentState = currentPair.Item2;
+            var statusItem = new ToolStripMenuItem("Default terminal: " + currentState) { Enabled = false };
+            _menu.Items.Add(statusItem);
+
+            _menu.Items.Add(new ToolStripSeparator());
+        }
+
+        private void OnSetDefaultTerminalToWCH()
+        {
+            // If user hasn't consented yet, show the consent dialog first.
+            if (!DefaultTerminal.HasUserConsented())
+            {
+                bool isWT = DefaultTerminal.IsWindowsTerminal();
+                var dlg = new ConsentDialog();
+                // No reliable owner from ContextMenuStrip; the dialog will center on screen if owner is null.
+                dlg.ShowDialog();
+
+                if (!dlg.Allowed) return;
+            }
+
+            bool success = DefaultTerminal.SaveAndSetToWindowsConsoleHost();
+            RebuildMenu();
+
+            if (success)
+            {
+                System.Windows.MessageBox.Show(
+                    "Default terminal changed to Windows Console Host.\nNew terminals will appear in TerminalGroupie.",
+                    "TerminalGroupie", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Information);
+            }
+        }
+
+        private void OnRestoreOriginalDefaultTerminal()
+        {
+            var result = System.Windows.MessageBox.Show(
+                "Restore your previous default terminal?\n\n" +
+                ("Current: Windows Console Host").Replace("\r", "").TrimEnd(),
+                "TerminalGroupie", System.Windows.MessageBoxButton.YesNo,
+                System.Windows.MessageBoxImage.Question);
+
+            if (result != System.Windows.MessageBoxResult.Yes) return;
+
+            bool success = DefaultTerminal.RestoreOriginal();
+            RebuildMenu();
+
+            if (success)
+            {
+                System.Windows.MessageBox.Show(
+                    "Your previous default terminal has been restored.",
+                    "TerminalGroupie", System.Windows.MessageBoxButton.OK,
+                    System.Windows.MessageBoxImage.Information);
+            }
+        }
+
+        /// <summary>Public helper for the app to refresh tray items (e.g., after default-terminal changes).</summary>
+        public void RefreshMenu() => RebuildMenu();
 
         public void Dispose()
         {

@@ -127,6 +127,9 @@ namespace TerminalGroupie
             _main = new MainWindow(_sessionManager);
             _tray = new TrayIcon(_sessionManager, ShowMainWindow);
 
+            // First-run default-terminal delegation prompt.
+            PromptDefaultTerminalConsent();
+
             _main.Show();
 
             // Start with one cmd terminal so the app is immediately usable.
@@ -251,6 +254,43 @@ namespace TerminalGroupie
             }
             _main.Show();
             _main.Activate();
+        }
+
+        /// <summary>If the default terminal is Windows Terminal and user hasn't consented, show a one-time prompt.</summary>
+        private void PromptDefaultTerminalConsent()
+        {
+            // Skip if: already using WCH (no change needed), or policy locks it, or user has already consented.
+            bool lockedByPolicy = DefaultTerminal.DefaultTerminalLockedByPolicy();
+            if (lockedByPolicy) return;
+
+            if (DefaultTerminal.IsWindowsConsoleHost()) return;
+
+            // Only prompt when the delegate is Windows Terminal — that's the case where wrapping fails.
+            if (!DefaultTerminal.IsWindowsTerminal()) return;
+
+            if (DefaultTerminal.HasUserConsented()) return;
+
+            // Show consent dialog on UI thread. If user says yes, apply immediately and mark consented.
+            try
+            {
+                var dlg = new ConsentDialog();
+                // _main may be null at this point; the dialog will center on screen if owner is null.
+                dlg.Owner = _main;
+                dlg.ShowDialog();
+
+                if (dlg.Allowed)
+                {
+                    // Mark before applying so a second prompt doesn't appear on next run.
+                    DefaultTerminal.MarkConsented();
+
+                    bool success = DefaultTerminal.SaveAndSetToWindowsConsoleHost();
+                    _tray?.RefreshMenu(); // refresh tray to reflect new state.
+                }
+            }
+            catch
+            {
+                // Best effort: if the dialog crashes, don't break startup.
+            }
         }
 
         protected override void OnExit(ExitEventArgs e)

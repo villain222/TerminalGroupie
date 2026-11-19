@@ -42,6 +42,8 @@ namespace TerminalGroupie
 
             ExitBtn.Click += (s, e) => App.ExitApp();
 
+            DefaultTerminalBtn.Click += (s, e) => OnDefaultTerminalClicked();
+
             OpenBtn.Click += (s, e) => { var sel = Selected(); if (sel != null) _mgr.ShowTerminal(sel); };
             HideBtn.Click += (s, e) => { var sel = Selected(); if (sel != null) _mgr.HideTerminal(sel); };
             KillBtn.Click += (s, e) =>
@@ -60,6 +62,12 @@ namespace TerminalGroupie
             };
 
             Refresh();
+        }
+
+        private void OnTerminalListDoubleClicked(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            var sel = Selected();
+            if (sel != null) _mgr.ShowTerminal(sel);
         }
 
         private TermSession? Selected() => TerminalList.SelectedItem as TermSession;
@@ -94,6 +102,96 @@ namespace TerminalGroupie
         {
             _mgr.SessionsChanged -= Refresh;
             base.OnClosed(e);
+        }
+
+        private void OnDefaultTerminalClicked()
+        {
+            // If already WCH or locked by policy, show status instead.
+            bool lockedByPolicy = DefaultTerminal.DefaultTerminalLockedByPolicy();
+            if (lockedByPolicy)
+            {
+                MessageBox.Show(
+                    "Your default terminal is managed by Group Policy and cannot be changed.\n\n" +
+                    "Contact your system administrator to modify the setting.",
+                    "TerminalGroupie", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (DefaultTerminal.IsWindowsConsoleHost())
+            {
+                // Currently WCH — offer restore.
+                bool hasOriginals = DefaultTerminal.GetCurrent() != null;
+                if (!hasOriginals)
+                {
+                    MessageBox.Show(
+                        "Default terminal is Windows Console Host.\nNo previous setting was saved to restore.",
+                        "TerminalGroupie", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                var result = MessageBox.Show(
+                    "Restore your previous default terminal?\n\n" +
+                    "(You can also do this from the tray icon.)",
+                    "TerminalGroupie", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (result == MessageBoxResult.Yes)
+                {
+                    bool success = DefaultTerminal.RestoreOriginal();
+                    RefreshDefaultTerminalButton();
+
+                    if (success)
+                        MessageBox.Show(
+                            "Your previous default terminal has been restored.",
+                            "TerminalGroupie", MessageBoxButton.OK, MessageBoxImage.Information);
+                    else
+                        MessageBox.Show(
+                            "Could not restore. The original setting may no longer be available.",
+                            "TerminalGroupie", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            else
+            {
+                // Not WCH — show consent dialog to change it.
+                if (!DefaultTerminal.HasUserConsented())
+                {
+                    var dlg = new ConsentDialog();
+                    dlg.Owner = this;
+                    dlg.ShowDialog();
+
+                    if (!dlg.Allowed) return;
+                }
+
+                bool success = DefaultTerminal.SaveAndSetToWindowsConsoleHost();
+                RefreshDefaultTerminalButton();
+
+                if (success)
+                    MessageBox.Show(
+                        "Default terminal changed to Windows Console Host.\n" +
+                        "New terminals will appear in TerminalGroupie.",
+                        "TerminalGroupie", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+
+        private void RefreshDefaultTerminalButton()
+        {
+            if (DefaultTerminalBtn == null) return;
+
+            bool lockedByPolicy = DefaultTerminal.DefaultTerminalLockedByPolicy();
+            if (lockedByPolicy)
+            {
+                DefaultTerminalBtn.Content = "Default Terminal… (locked by policy)";
+                DefaultTerminalBtn.IsEnabled = false;
+                return;
+            }
+
+            string stateText;
+            if (DefaultTerminal.IsWindowsConsoleHost())
+                stateText = "Default: WCH [ok]";
+            else if (!string.IsNullOrEmpty(DefaultTerminal.GetCurrent()?.Item2))
+                stateText = "Change to Windows Console Host…";
+            else
+                stateText = "Default Terminal…";
+
+            DefaultTerminalBtn.Content = stateText;
         }
     }
 }

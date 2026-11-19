@@ -20,6 +20,13 @@
   <ItemGroup>
     <Page Include="src\MainWindow.xaml" />
     <Page Include="src\TerminalWindow.xaml" />
+    <Page Include="src\ConsentDialog.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WMI (Win32_Process) is the reliable way to read a process's parent PID on
+         this machine; the native NtQueryInformationProcess / Toolhelp paths fail. -->
+    <PackageReference Include="System.Management" Version="10.0.0" />
   </ItemGroup>
 
 </Project>

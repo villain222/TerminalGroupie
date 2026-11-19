@@ -1,8 +1,10 @@
 {
   "version": 2,
-  "dgSpecHash": "kzXFYVWjok4=",
+  "dgSpecHash": "MoVMsUWLKRg=",
   "success": true,
   "projectFilePath": "D:\\AI stuff\\TerminalGroupie\\TerminalGroupie.csproj",
-  "expectedPackageFiles": [],
+  "expectedPackageFiles": [
+    "C:\\Users\\saturn\\.nuget\\packages\\system.management\\10.0.0\\system.management.10.0.0.nupkg.sha512"
+  ],
   "logs": []
 }

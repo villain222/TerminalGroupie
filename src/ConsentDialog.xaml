@@ -1,0 +1,40 @@
+<Window x:Class="TerminalGroupie.ConsentDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Default Terminal Access" Height="440" Width="500"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize">
+
+    <!-- Grid (not DockPanel): the text row is star-sized and the button row is
+         Auto-sized, so the buttons are ALWAYS visible even if the text is long.
+         The text lives in a ScrollViewer so it can never push the buttons off. -->
+    <Grid Background="#1E1E1E">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Info text -->
+        <ScrollViewer Grid.Row="0" Margin="24,20,24,0" Padding="0,0,10,0"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <TextBlock TextWrapping="Wrap" Foreground="#D0D0D0" FontSize="13" LineHeight="20">
+                <Run FontWeight="SemiBold" Foreground="#FFFFFF" Text="Windows Terminal is set as your default terminal." /><LineBreak/><LineBreak/>
+                To wrap terminals in our custom chrome window (minimize-to-tray), we need to change the default terminal back to Windows Console Host. This only affects newly launched consoles — it doesn't touch existing ones.<LineBreak/><LineBreak/>
+                <Run FontWeight="SemiBold" Foreground="#FFFFFF">What this does:</Run><LineBreak/>
+                • Writes HKCU registry values (reversible)<LineBreak/>
+                • Each new terminal will appear in our manager window<LineBreak/>
+                • One-click restore button returns to your previous setting<LineBreak/><LineBreak/>
+                <Run Foreground="#FF8C42" FontWeight="SemiBold">Your current default terminal will be saved and can be restored at any time.</Run>
+            </TextBlock>
+        </ScrollViewer>
+
+        <!-- Buttons: always visible (Auto row) -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,24,20">
+            <Button x:Name="AllowBtn" Content="_Allow (recommended)" Padding="12,5" MinWidth="150" Margin="0,0,8,0"
+                    IsDefault="True" Background="#2D7D2D" Foreground="White" BorderBrush="#3A9E3A" Click="OnAllowed"/>
+            <Button x:Name="DenyBtn" Content="_Later" Padding="12,5" MinWidth="90"
+                    Background="#444444" Foreground="White" BorderBrush="#666666" IsCancel="True" Click="OnDenied"/>
+        </StackPanel>
+    </Grid>
+
+</Window>

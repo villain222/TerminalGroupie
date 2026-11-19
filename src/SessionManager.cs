@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Interop;
@@ -38,6 +39,20 @@ namespace TerminalGroupie
 
         /// <summary>Last diagnostic note from the wrapper-attach flow (null = attach never ran yet).</summary>
         public string? AttachNote { get; internal set; }
+
+        /// <summary>
+        /// Human-readable attach outcome for the UI: "wrapped" when the custom
+        /// chrome window is in use, the failure reason otherwise.
+        /// </summary>
+        public string StatusText
+        {
+            get
+            {
+                if (Wrapper != null) return "wrapped";
+                if (AttachNote != null) return AttachNote;
+                return "attaching…";
+            }
+        }
 
         public TermSession(int id, string title, ShellKind kind, Process process)
         {
@@ -128,7 +143,12 @@ namespace TerminalGroupie
         /// <summary>Launch a new terminal (cmd or PowerShell) and wrap it in a custom-chrome window.</summary>
         public TermSession NewTerminal(ShellKind kind)
         {
-            var before = Native.TopLevelWindows();
+            // Snapshot the conhost processes that exist BEFORE we launch, so the
+            // attach flow can identify OUR new conhost by what appears afterwards.
+            // A pre-existing conhost (the user's own terminal) is in this set and is
+            // therefore never adopted.
+            var beforeConhosts = Native.ConhostPids();
+
             var process = StartShell(kind);
 
             int id;
@@ -141,9 +161,9 @@ namespace TerminalGroupie
             process.EnableRaisingEvents = true;
             process.Exited += (s, e) => OnSessionExited(session);
 
-            // Find the new console window (off the UI thread) and re-parent it
-            // into a wrapper window.
-            _ = AttachWrapperAsync(session, before);
+            // Find OUR new conhost (off the UI thread) and re-parent its console
+            // window into a wrapper window.
+            _ = AttachWrapperAsync(session, beforeConhosts);
             return session;
         }
 
@@ -213,51 +233,117 @@ namespace TerminalGroupie
             return p;
         }
 
-        private async Task AttachWrapperAsync(TermSession session, HashSet<IntPtr> before)
+        private async Task AttachWrapperAsync(TermSession session, HashSet<uint> beforeConhosts)
         {
             IntPtr console = IntPtr.Zero;
-            uint shellPid = (uint)session.Process.Id;
+            int hostPid = 0;
+            string hostName = "";
+            uint setParentError = 0;
+            string outcome = "";
+            int shellPid = session.Process.Id;
+
+            // ---- phase 1 (off the UI thread): find THIS shell's console window ----
+            // Primary (verified empirically): a console process OWNS its console
+            // window — the visible ConsoleWindowClass top-level window belongs to the
+            // shell's own pid (conhost only renders it). Matching the window to the
+            // shell's pid is 1:1 and provably ours; a foreign window (the user's own
+            // terminal) can never be returned because it is owned by a different pid.
+            //
+            // Fallback: some configurations have a NEW conhost.exe own the window
+            // instead; a conhost that was already running before our launch is in
+            // beforeConhosts and is never adopted.
             try
             {
                 await Task.Run(() =>
                 {
-                    for (int i = 0; i < 120; i++)
+                    for (int i = 0; i < 120; i++) // up to ~6 seconds
                     {
                         Thread.Sleep(50);
-                        foreach (var h in Native.NewConsoleWindows(before, shellPid))
+                        if (!session.IsAlive)
                         {
-                            lock (_claimGate)
+                            return; // shell is gone; nothing to attach
+                        }
+
+                        // Primary: the console window owned by our shell.
+                        IntPtr w = Native.FindConsoleWindowByPid((uint)shellPid, "ConsoleWindowClass");
+                        if (w == IntPtr.Zero)
+                        {
+                            // Fallback: a new conhost that owns the window.
+                            var newConhosts = NewConhosts(beforeConhosts);
+                            if (newConhosts.Count == 0)
                             {
-                                if (_claimedConsoles.Add(h))
-                                {
-                                    console = h;
-                                    return;
-                                }
+                                continue; // console window not up yet
+                            }
+
+                            uint host = newConhosts.Count == 1
+                                ? newConhosts[0]
+                                : PickOurConhost(newConhosts, shellPid);
+                            hostName = "conhost";
+                            hostPid = (int)host;
+                            w = Native.FindVisibleWindowByPid(host);
+                            if (w == IntPtr.Zero)
+                            {
+                                continue; // conhost up but its window not visible yet
                             }
                         }
+                        else
+                        {
+                            hostName = "shell";
+                            hostPid = shellPid;
+                        }
+
+                        lock (_claimGate)
+                        {
+                            if (_claimedConsoles.Add(w))
+                            {
+                                console = w;
+                            }
+                        }
+                        return;
                     }
                 });
             }
             catch (Exception ex)
             {
-                session.AttachNote = "console discovery crashed: " + ex;
+                session.AttachNote = "console discovery crashed: " + ex.Message;
+                outcome = "discovery crashed: " + ex.Message;
+                LogAttach(session, outcome, hostName, hostPid, IntPtr.Zero, 0);
                 return;
             }
 
             if (console == IntPtr.Zero)
             {
-                // No console window found: it stays a plain top-level window and is
-                // managed with the classic show / hide / kill behavior.
-                session.AttachNote = "no new console window appeared within 6s";
+                if (!session.IsAlive)
+                {
+                    session.AttachNote = "shell exited before attach";
+                    outcome = "shell exited before attach";
+                }
+                else if (WindowsTerminalRunning())
+                {
+                    // The shell is hosted inside a shared Windows Terminal window,
+                    // which may host many tabs/sessions. Re-parenting or hiding it
+                    // would break the user's other sessions, so we leave it exactly
+                    // as it is.
+                    session.AttachNote = "hosted by Windows Terminal (shared host) — left as plain window";
+                    outcome = "shared host: WindowsTerminal";
+                }
+                else
+                {
+                    session.AttachNote = "no console window appeared within 6s";
+                    outcome = "no console window within 6s";
+                }
+                LogAttach(session, outcome, hostName, hostPid, IntPtr.Zero, 0);
+                RaiseChanged();
                 return;
             }
 
-            session.AttachNote = "console 0x" + console.ToString("X") + " found; reparenting";
+            session.AttachNote = "host " + hostName + " pid=" + hostPid + "; console 0x" + console.ToString("X") + "; reparenting";
             await _dispatcher.InvokeAsync(() =>
             {
                 if (!session.IsAlive)
                 {
                     session.AttachNote += "; shell already exited";
+                    outcome = "shell exited before reparent";
                     return;
                 }
 
@@ -273,7 +359,7 @@ namespace TerminalGroupie
                     session.Wrapper = wrapper;
                     IntPtr wrapperHwnd = new WindowInteropHelper(wrapper).EnsureHandle();
 
-                    if (Native.SetParentTo(console, wrapperHwnd))
+                    if (Native.SetParentTo(console, wrapperHwnd, out setParentError))
                     {
                         wrapper.Show();
                         Native.Show(console, Native.SW_SHOW);
@@ -281,21 +367,25 @@ namespace TerminalGroupie
                         wrapper.Dispatcher.BeginInvoke(new Action(wrapper.RefitConsole));
                         Native.SetFocus(console);
                         session.AttachNote += "; re-parent OK";
+                        outcome = "wrapped";
                     }
                     else
                     {
-                        // Re-parenting failed (older/odd conhost builds): fall back to a
-                        // plain top-level console window so the session still works.
+                        // Re-parenting failed: fall back to a plain top-level console
+                        // window so the session still works. The window is provably
+                        // ours (owned by this shell's own pid), so classic show/hide
+                        // on it is safe.
                         session.Wrapper = null;
                         wrapper.RequestClose();
                         Native.Show(console, Native.SW_SHOW);
-                        session.AttachNote += "; SetParentTo FAILED -> fallback (shell alive="
-                            + session.IsAlive + ")";
+                        session.AttachNote += "; SetParentTo FAILED (win32 err " + setParentError + ") -> plain window";
+                        outcome = "SetParentTo failed (win32 err " + setParentError + ") -> plain window";
                     }
                 }
                 catch (Exception ex)
                 {
                     session.AttachNote += "; attach exception: " + ex;
+                    outcome = "attach exception: " + ex.Message;
                     var w = session.Wrapper;
                     session.Wrapper = null;
                     try
@@ -310,7 +400,87 @@ namespace TerminalGroupie
                 }
             });
 
+            if (outcome.Length == 0)
+            {
+                outcome = "wrapped";
+            }
+            LogAttach(session, outcome, hostName, hostPid, console, setParentError);
             RaiseChanged();
+        }
+
+        /// <summary>
+        /// conhost PIDs that are running NOW but were not in <paramref name="before"/>.
+        /// These are the conhosts spawned since our launch — candidates for being
+        /// this terminal's host.
+        /// </summary>
+        private static List<uint> NewConhosts(HashSet<uint> before)
+        {
+            var result = new List<uint>();
+            foreach (var pid in Native.ConhostPids())
+            {
+                if (!before.Contains(pid))
+                {
+                    result.Add(pid);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// From several new conhosts, pick the one that renders <paramref name="shellPid"/>:
+        /// the one whose parent is our shell (WMI parent-PID). Falls back to the first
+        /// candidate if the parent cannot be determined.
+        /// </summary>
+        private static uint PickOurConhost(List<uint> candidates, int shellPid)
+        {
+            foreach (var c in candidates)
+            {
+                if (ProcessTree.GetParentPid((int)c) == shellPid)
+                {
+                    return c;
+                }
+            }
+            return candidates[0];
+        }
+
+        /// <summary>True if Windows Terminal (the shared Win11 terminal host) is running.</summary>
+        private static bool WindowsTerminalRunning()
+        {
+            try
+            {
+                foreach (var p in Process.GetProcessesByName("WindowsTerminal"))
+                {
+                    using (p)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+                // best effort
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Append one attach attempt (with the full process-tree and window evidence)
+        /// to %TEMP%\TerminalGroupie_attach.log so failures on any machine are
+        /// diagnosable without a round trip.
+        /// </summary>
+        private static void LogAttach(TermSession session, string outcome, string hostName, int hostPid, IntPtr console, uint setParentError)
+        {
+            var sb = new StringBuilder();
+            sb.Append("== attach ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"))
+              .Append("  ").Append(session.Title)
+              .Append("  (shell pid=").Append(session.Process.Id).Append(") ==").Append('\n');
+            sb.Append(AttachLog.AncestorChain(session.Process.Id)).Append('\n');
+            sb.Append("  host: ").Append(hostName.Length > 0 ? hostName + " pid=" + hostPid : "none found").Append('\n');
+            sb.Append("  console window: ").Append(console == IntPtr.Zero ? "none" : "0x" + console.ToString("X")).Append('\n');
+            sb.Append("  SetParentTo win32 error: ").Append(setParentError).Append('\n');
+            sb.Append("  outcome: ").Append(outcome).Append('\n');
+            sb.Append("  top-level windows:\n").Append(AttachLog.WindowDump());
+            AttachLog.Append(sb.ToString());
         }
 
         private void OnSessionExited(TermSession session)

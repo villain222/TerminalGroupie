@@ -114,49 +114,108 @@ namespace TerminalGroupie
 
         // ---------- public API ----------
 
-        /// <summary>Snapshot of all currently visible top-level window handles.</summary>
-        public static HashSet<IntPtr> TopLevelWindows()
+        /// <summary>One top-level window: handle, class name, owning pid, visibility.</summary>
+        public sealed class WindowInfo
         {
-            var set = new HashSet<IntPtr>();
+            public IntPtr Handle;
+            public string ClassName = "";
+            public uint Pid;
+            public bool Visible;
+        }
+
+        /// <summary>Snapshot of every top-level window (visible or not), with class and owning pid.</summary>
+        public static List<WindowInfo> TopLevelWindows()
+        {
+            var list = new List<WindowInfo>();
             EnumWindows((hWnd, lParam) =>
             {
-                if (IsWindowVisible(hWnd))
-                {
-                    set.Add(hWnd);
-                }
+                var w = new WindowInfo { Handle = hWnd, Visible = IsWindowVisible(hWnd) };
+                var sb = new StringBuilder(256);
+                GetClassNameNative(hWnd, sb, sb.Capacity);
+                w.ClassName = sb.ToString();
+                GetWindowThreadProcessId(hWnd, out w.Pid);
+                list.Add(w);
                 return true;
             }, IntPtr.Zero);
-            return set;
+            return list;
         }
 
         /// <summary>
-        /// Top-level console windows (Win32 class "ConsoleWindowClass") that were not
-        /// present in the <paramref name="before"/> snapshot. Windows owned by
-        /// <paramref name="preferredPid"/> come first, so back-to-back terminal
-        /// creations claim their own console instead of each other's.
+        /// The console window of <paramref name="pid"/>: its visible top-level
+        /// <paramref name="className"/> window. Verified empirically: a console
+        /// process (cmd/powershell) OWNS its console window — the window's pid is the
+        /// shell's pid, not conhost's (conhost only renders it). Matching the window
+        /// to the shell's own pid is therefore 1:1 and provably ours: we can never
+        /// return a window belonging to any other process.
         /// </summary>
-        public static List<IntPtr> NewConsoleWindows(HashSet<IntPtr> before, uint preferredPid)
+        public static IntPtr FindConsoleWindowByPid(uint pid, string className)
         {
-            var preferred = new List<IntPtr>();
-            var others = new List<IntPtr>();
+            IntPtr found = IntPtr.Zero;
             EnumWindows((hWnd, lParam) =>
             {
-                if (IsWindowVisible(hWnd) && !before.Contains(hWnd))
+                GetWindowThreadProcessId(hWnd, out uint wpid);
+                if (wpid != pid || !IsWindowVisible(hWnd))
                 {
-                    var sb = new StringBuilder(256);
-                    GetClassNameNative(hWnd, sb, sb.Capacity);
-                    if (sb.ToString() == "ConsoleWindowClass")
-                    {
-                        uint pid = 0;
-                        GetWindowThreadProcessId(hWnd, out pid);
-                        if (pid == preferredPid) preferred.Add(hWnd);
-                        else others.Add(hWnd);
-                    }
+                    return true; // keep going
+                }
+                var sb = new StringBuilder(256);
+                GetClassNameNative(hWnd, sb, sb.Capacity);
+                if (sb.ToString().Equals(className, StringComparison.Ordinal))
+                {
+                    found = hWnd;
+                    return false; // found it, stop
                 }
                 return true;
             }, IntPtr.Zero);
-            preferred.AddRange(others);
-            return preferred;
+            return found;
+        }
+
+        /// <summary>
+        /// The first visible top-level window owned by <paramref name="pid"/>
+        /// (any class). Used only as a fallback for hosts (e.g. a conhost) that own
+        /// the console window instead of the shell.
+        /// </summary>
+        public static IntPtr FindVisibleWindowByPid(uint pid)
+        {
+            IntPtr visible = IntPtr.Zero;
+            EnumWindows((hWnd, lParam) =>
+            {
+                GetWindowThreadProcessId(hWnd, out uint wpid);
+                if (wpid == pid && IsWindowVisible(hWnd))
+                {
+                    visible = hWnd;
+                    return false; // found it, stop
+                }
+                return true;
+            }, IntPtr.Zero);
+            return visible;
+        }
+
+        /// <summary>
+        /// PIDs of all currently running conhost.exe processes. Used for the
+        /// before/after diff: a conhost that appears AFTER we launch a shell is, by
+        /// construction, the console host of THAT shell (a pre-existing one — e.g. the
+        /// user's own PowerShell — was already in the "before" set and is never
+        /// adopted).
+        /// </summary>
+        public static HashSet<uint> ConhostPids()
+        {
+            var set = new HashSet<uint>();
+            try
+            {
+                foreach (var p in System.Diagnostics.Process.GetProcessesByName("conhost"))
+                {
+                    using (p)
+                    {
+                        set.Add((uint)p.Id);
+                    }
+                }
+            }
+            catch
+            {
+                // best effort
+            }
+            return set;
         }
 
         public static bool IsMinimized(IntPtr hWnd)
@@ -356,10 +415,12 @@ namespace TerminalGroupie
         /// <paramref name="parent"/> and turns it into a proper child window
         /// (SetParent does not set WS_CHILD on its own — we add it explicitly,
         /// then strip the console's caption/border styles so it fills its rectangle).
-        /// Returns false if the re-parent did not take effect.
+        /// Returns false if the re-parent did not take effect; <paramref name="win32Error"/>
+        /// carries the GetLastError() from SetParent on failure (0 = never reached it).
         /// </summary>
-        public static bool SetParentTo(IntPtr child, IntPtr parent)
+        public static bool SetParentTo(IntPtr child, IntPtr parent, out uint win32Error)
         {
+            win32Error = 0;
             if (child == IntPtr.Zero || parent == IntPtr.Zero)
             {
                 return false;
@@ -370,6 +431,7 @@ namespace TerminalGroupie
             IntPtr oldParent = SetParent(child, parent);
             if (oldParent == IntPtr.Zero)
             {
+                win32Error = (uint)System.Runtime.InteropServices.Marshal.GetLastWin32Error();
                 return false;
             }
 
